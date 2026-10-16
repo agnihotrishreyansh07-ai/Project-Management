@@ -1,0 +1,898 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Kanban, Plus, CheckCircle2, Clock, AlertCircle, User, Users, 
+  MessageSquare, Bell, Settings, LogOut, Search, Filter, 
+  ChevronRight, Calendar, Tag, MoreHorizontal, ArrowRight, 
+  Send, Trash2, Edit3, Shield, Sparkles, LayoutDashboard,
+  CheckSquare, Activity, UserPlus, Eye, Lock, Globe
+} from 'lucide-react';
+
+// --- MOCK USERS & DATA ---
+const INITIAL_USERS = [
+  { id: 'usr-1', name: 'Alex Morgan', email: 'alex@company.com', avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80', role: 'Product Lead' },
+  { id: 'usr-2', name: 'David Chen', email: 'david@company.com', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80', role: 'Senior Engineer' },
+  { id: 'usr-3', name: 'Sarah Jenkins', email: 'sarah@company.com', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80', role: 'UI/UX Designer' }
+];
+
+const INITIAL_PROJECTS = [
+  {
+    id: 'proj-1',
+    name: '🚀 Q3 Product Launch',
+    description: 'Main release cycle for the v2.0 SaaS platform overhaul.',
+    visibility: 'team',
+    members: ['usr-1', 'usr-2', 'usr-3'],
+    columns: [
+      { id: 'col-todo', title: 'To Do', color: 'bg-slate-100 text-slate-700' },
+      { id: 'col-progress', title: 'In Progress', color: 'bg-amber-50 text-amber-700' },
+      { id: 'col-review', title: 'In Review', color: 'bg-indigo-50 text-indigo-700' },
+      { id: 'col-done', title: 'Completed', color: 'bg-emerald-50 text-emerald-700' }
+    ],
+    tasks: [
+      {
+        id: 'task-1',
+        title: 'Design System Migration to Tailwind v4',
+        description: 'Update all global design tokens, buttons, and typography styling components.',
+        columnId: 'col-progress',
+        priority: 'High',
+        dueDate: '2026-10-25',
+        assigneeId: 'usr-3',
+        labels: ['Design', 'Frontend'],
+        comments: [
+          { id: 'c-1', userId: 'usr-1', text: 'Please ensure high contrast on dark mode toggle!', timestamp: '2 hours ago' }
+        ]
+      },
+      {
+        id: 'task-2',
+        title: 'WebSocket Server Scaling & Fault Tolerance',
+        description: 'Implement automatic reconnection strategies and heartbeat ping/pong intervals.',
+        columnId: 'col-todo',
+        priority: 'Urgent',
+        dueDate: '2026-10-22',
+        assigneeId: 'usr-2',
+        labels: ['Backend', 'Infrastructure'],
+        comments: []
+      },
+      {
+        id: 'task-3',
+        title: 'User Onboarding Flow Copywriting',
+        description: 'Refine welcoming tooltips and quick walkthrough steps for new signups.',
+        columnId: 'col-review',
+        priority: 'Medium',
+        dueDate: '2026-10-28',
+        assigneeId: 'usr-1',
+        labels: ['Product', 'Copy'],
+        comments: []
+      }
+    ],
+    activityLog: [
+      { id: 'act-1', text: 'David Chen moved "WebSocket Server" to To Do', timestamp: '10 mins ago' },
+      { id: 'act-2', text: 'Sarah Jenkins commented on "Design System Migration"', timestamp: '2 hours ago' }
+    ]
+  }
+];
+
+export default function App() {
+  // --- AUTH STATE ---
+  const [currentUser, setCurrentUser] = useState(INITIAL_USERS[0]);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
+  
+  // --- APP NAVIGATION & DATA STATE ---
+  const [projects, setProjects] = useState(INITIAL_PROJECTS);
+  const [activeProjectId, setActiveProjectId] = useState(INITIAL_PROJECTS[0].id);
+  const [activeView, setActiveView] = useState('board'); // 'board' | 'analytics' | 'team'
+  
+  // --- MODALS & FORM STATES ---
+  const [isNewTaskModalOpen, setIsNewTaskModalOpen] = useState(false);
+  const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [filterQuery, setFilterQuery] = useState('');
+  const [filterPriority, setFilterPriority] = useState('All');
+  
+  // --- SIMULATED REALTIME WEBSOCKET/BROADCAST CHANNEL ---
+  const [notifications, setNotifications] = useState([
+    { id: 'notif-1', title: 'Task Assigned', message: 'You were assigned to "User Onboarding Flow Copywriting"', time: '1 hour ago', read: false }
+  ]);
+  const [showNotifications, setShowNotifications] = useState(false);
+
+  // Active Project Helper
+  const currentProject = projects.find(p => p.id === activeProjectId) || projects[0];
+
+  // Broadcast Channel for multi-tab real-time sync simulation
+  const channelRef = useRef(null);
+  useEffect(() => {
+    try {
+      channelRef.current = new BroadcastChannel('synergy_board_sync');
+      channelRef.current.onmessage = (event) => {
+        if (event.data && event.data.type === 'PROJECT_UPDATE') {
+          setProjects(event.data.projects);
+          addNotification('Realtime Sync', 'Project board updated by team member.');
+        }
+      };
+    } catch (e) {
+      console.log('BroadcastChannel not supported or disabled');
+    }
+
+    return () => {
+      if (channelRef.current) channelRef.current.close();
+    };
+  }, []);
+
+  const broadcastChange = (updatedProjects) => {
+    setProjects(updatedProjects);
+    if (channelRef.current) {
+      channelRef.current.postMessage({ type: 'PROJECT_UPDATE', projects: updatedProjects });
+    }
+  };
+
+  const addNotification = (title, message) => {
+    const newNotif = { id: Date.now().toString(), title, message, time: 'Just now', read: false };
+    setNotifications(prev => [newNotif, ...prev]);
+  };
+
+  // --- TASK & PROJECT MUTATIONS ---
+  const handleCreateTask = (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const newTask = {
+      id: 'task-' + Date.now(),
+      title: formData.get('title'),
+      description: formData.get('description'),
+      columnId: formData.get('columnId'),
+      priority: formData.get('priority'),
+      dueDate: formData.get('dueDate'),
+      assigneeId: formData.get('assigneeId'),
+      labels: formData.get('labels').split(',').map(s => s.trim()).filter(Boolean),
+      comments: []
+    };
+
+    const updatedProjects = projects.map(proj => {
+      if (proj.id === currentProject.id) {
+        return {
+          ...proj,
+          tasks: [newTask, ...proj.tasks],
+          activityLog: [{ id: 'act-' + Date.now(), text: `${currentUser.name} created task "${newTask.title}"`, timestamp: 'Just now' }, ...proj.activityLog]
+        };
+      }
+      return proj;
+    });
+
+    broadcastChange(updatedProjects);
+    setIsNewTaskModalOpen(false);
+    addNotification('Task Created', `Successfully created "${newTask.title}"`);
+  };
+
+  const handleMoveTask = (taskId, targetColumnId) => {
+    let movedTaskTitle = '';
+    const updatedProjects = projects.map(proj => {
+      if (proj.id === currentProject.id) {
+        const updatedTasks = proj.tasks.map(t => {
+          if (t.id === taskId) {
+            movedTaskTitle = t.title;
+            return { ...t, columnId: targetColumnId };
+          }
+          return t;
+        });
+        return {
+          ...proj,
+          tasks: updatedTasks,
+          activityLog: [{ id: 'act-' + Date.now(), text: `${currentUser.name} moved "${movedTaskTitle}"`, timestamp: 'Just now' }, ...proj.activityLog]
+        };
+      }
+      return proj;
+    });
+    broadcastChange(updatedProjects);
+  };
+
+  const handleDeleteTask = (taskId) => {
+    const updatedProjects = projects.map(proj => {
+      if (proj.id === currentProject.id) {
+        return {
+          ...proj,
+          tasks: proj.tasks.filter(t => t.id !== taskId)
+        };
+      }
+      return proj;
+    });
+    broadcastChange(updatedProjects);
+    setSelectedTask(null);
+    addNotification('Task Deleted', 'Task removed from board.');
+  };
+
+  const handleAddComment = (taskId, commentText) => {
+    if (!commentText.trim()) return;
+    const newComment = {
+      id: 'c-' + Date.now(),
+      userId: currentUser.id,
+      text: commentText,
+      timestamp: 'Just now'
+    };
+
+    const updatedProjects = projects.map(proj => {
+      if (proj.id === currentProject.id) {
+        const updatedTasks = proj.tasks.map(t => {
+          if (t.id === taskId) {
+            return { ...t, comments: [...t.comments, newComment] };
+          }
+          return t;
+        });
+        return { ...proj, tasks: updatedTasks };
+      }
+      return proj;
+    });
+
+    broadcastChange(updatedProjects);
+    // Update selected task state instantly for responsive modal
+    setSelectedTask(prev => prev ? { ...prev, comments: [...prev.comments, newComment] } : null);
+  };
+
+  const handleCreateProject = (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const newProj = {
+      id: 'proj-' + Date.now(),
+      name: formData.get('name'),
+      description: formData.get('description'),
+      visibility: formData.get('visibility'),
+      members: [currentUser.id],
+      columns: [
+        { id: 'col-todo', title: 'To Do', color: 'bg-slate-100 text-slate-700' },
+        { id: 'col-progress', title: 'In Progress', color: 'bg-amber-50 text-amber-700' },
+        { id: 'col-done', title: 'Done', color: 'bg-emerald-50 text-emerald-700' }
+      ],
+      tasks: [],
+      activityLog: [{ id: 'act-' + Date.now(), text: `Project created by ${currentUser.name}`, timestamp: 'Just now' }]
+    };
+
+    setProjects([...projects, newProj]);
+    setActiveProjectId(newProj.id);
+    setIsNewProjectModalOpen(false);
+    addNotification('Project Created', `Welcome to ${newProj.name}`);
+  };
+
+  // --- LOGIN SCREEN ---
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 flex items-center justify-center p-6 text-slate-100 font-sans">
+        <div className="max-w-md w-full bg-slate-900/80 backdrop-blur-xl border border-indigo-500/30 p-8 rounded-3xl shadow-2xl space-y-6">
+          <div className="text-center space-y-2">
+            <div className="inline-flex p-3 bg-indigo-600/20 text-indigo-400 rounded-2xl mb-2">
+              <Kanban className="w-8 h-8" />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">Welcome to SynapseFlow</h1>
+            <p className="text-sm text-slate-400">Collaborative Project Management & Task Boards</p>
+          </div>
+          
+          <div className="space-y-4">
+            <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Select Demo User Persona</label>
+            <div className="space-y-2">
+              {INITIAL_USERS.map(u => (
+                <button
+                  key={u.id}
+                  onClick={() => { setCurrentUser(u); setIsLoggedIn(true); }}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-800/60 hover:bg-indigo-600/20 border border-slate-700/50 hover:border-indigo-500/50 transition-all text-left group"
+                >
+                  <img src={u.avatar} alt={u.name} className="w-10 h-10 rounded-full object-cover border border-indigo-400/30" />
+                  <div className="flex-1">
+                    <div className="font-medium text-white group-hover:text-indigo-300">{u.name}</div>
+                    <div className="text-xs text-slate-400">{u.role}</div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-slate-500 group-hover:text-indigo-400 transform group-hover:translate-x-1 transition-transform" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- FILTERED TASKS ---
+  const filteredTasks = currentProject.tasks.filter(t => {
+    const matchesQuery = t.title.toLowerCase().includes(filterQuery.toLowerCase()) || 
+                         t.description.toLowerCase().includes(filterQuery.toLowerCase());
+    const matchesPriority = filterPriority === 'All' || t.priority === filterPriority;
+    return matchesQuery && matchesPriority;
+  });
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex font-sans selection:bg-indigo-500 selection:text-white">
+      
+      {/* --- SIDEBAR NAVIGATION --- */}
+      <aside className="w-72 bg-slate-900/90 border-r border-slate-800 flex flex-col justify-between hidden md:flex">
+        <div className="p-6 space-y-6">
+          {/* Logo */}
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-gradient-to-tr from-indigo-600 to-violet-500 text-white rounded-2xl shadow-lg shadow-indigo-600/30">
+              <Kanban className="w-6 h-6" />
+            </div>
+            <div>
+              <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-white via-slate-200 to-indigo-300 bg-clip-text text-transparent">SynapseFlow</span>
+              <span className="block text-[10px] text-indigo-400 uppercase tracking-widest font-semibold">Enterprise Workspace</span>
+            </div>
+          </div>
+
+          {/* Projects Selector List */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400 px-2">
+              <span>Projects</span>
+              <button 
+                onClick={() => setIsNewProjectModalOpen(true)}
+                className="p-1 hover:bg-slate-800 rounded-lg text-indigo-400 hover:text-indigo-300 transition-colors"
+                title="Create Project"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            
+            <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+              {projects.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => { setActiveProjectId(p.id); setActiveView('board'); }}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    activeProjectId === p.id && activeView === 'board'
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                      : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+                  }`}
+                >
+                  <span className="truncate">{p.name}</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full ${activeProjectId === p.id ? 'bg-indigo-700 text-indigo-100' : 'bg-slate-800 text-slate-400'}`}>
+                    {p.tasks.length}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Main Navigation links */}
+          <div className="space-y-1 pt-4 border-t border-slate-800/80">
+            <button
+              onClick={() => setActiveView('analytics')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                activeView === 'analytics' ? 'bg-slate-800 text-indigo-400' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Project Analytics
+            </button>
+            <button
+              onClick={() => setActiveView('team')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                activeView === 'team' ? 'bg-slate-800 text-indigo-400' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              Team Members
+            </button>
+          </div>
+        </div>
+
+        {/* Current User Card */}
+        <div className="p-4 m-4 bg-slate-950/60 border border-slate-800 rounded-2xl flex items-center justify-between">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <img src={currentUser.avatar} alt={currentUser.name} className="w-9 h-9 rounded-full object-cover border border-slate-700" />
+            <div className="truncate">
+              <div className="text-xs font-semibold text-white truncate">{currentUser.name}</div>
+              <div className="text-[10px] text-slate-400 truncate">{currentUser.role}</div>
+            </div>
+          </div>
+          <button 
+            onClick={() => setIsLoggedIn(false)}
+            className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition-colors"
+            title="Switch User / Logout"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </aside>
+
+      {/* --- MAIN CONTENT AREA --- */}
+      <main className="flex-1 flex flex-col min-w-0 bg-slate-950">
+        
+        {/* Top Header */}
+        <header className="h-16 border-b border-slate-800/80 px-6 flex items-center justify-between bg-slate-900/50 backdrop-blur-md sticky top-0 z-20">
+          <div className="flex items-center gap-4">
+            <h1 className="text-lg font-bold text-white flex items-center gap-2">
+              <span>{currentProject.name}</span>
+              <span className="text-xs bg-slate-800 text-slate-300 px-2.5 py-0.5 rounded-full border border-slate-700">
+                {currentProject.visibility === 'team' ? 'Team Workspace' : 'Private'}
+              </span>
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {/* Search Input */}
+            <div className="relative hidden sm:block">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 transform -translate-y-1/2" />
+              <input 
+                type="text" 
+                placeholder="Search tasks..." 
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-1.5 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 w-64"
+              />
+            </div>
+
+            {/* Priority Filter */}
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-sm">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
+              <select 
+                value={filterPriority}
+                onChange={(e) => setFilterPriority(e.target.value)}
+                className="bg-transparent text-slate-300 focus:outline-none text-xs cursor-pointer"
+              >
+                <option value="All" className="bg-slate-900">All Priorities</option>
+                <option value="Urgent" className="bg-slate-900">Urgent</option>
+                <option value="High" className="bg-slate-900">High</option>
+                <option value="Medium" className="bg-slate-900">Medium</option>
+                <option value="Low" className="bg-slate-900">Low</option>
+              </select>
+            </div>
+
+            {/* Notifications Dropdown Toggle */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl relative transition-colors"
+              >
+                <Bell className="w-5 h-5" />
+                {notifications.some(n => !n.read) && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>
+                )}
+              </button>
+
+              {showNotifications && (
+                <div className="absolute right-0 mt-2 w-80 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-4 z-50 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                    <span className="font-semibold text-sm text-white">Notifications</span>
+                    <button 
+                      onClick={() => setNotifications(notifications.map(n => ({...n, read: true})))}
+                      className="text-xs text-indigo-400 hover:underline"
+                    >
+                      Mark all read
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {notifications.length === 0 ? (
+                      <div className="text-center py-6 text-xs text-slate-500">No new notifications</div>
+                    ) : (
+                      notifications.map(n => (
+                        <div key={n.id} className="p-2.5 rounded-xl bg-slate-800/50 hover:bg-slate-800 text-xs space-y-1">
+                          <div className="font-medium text-slate-200">{n.title}</div>
+                          <div className="text-slate-400">{n.message}</div>
+                          <div className="text-[10px] text-slate-500">{n.time}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* New Task Button */}
+            <button
+              onClick={() => setIsNewTaskModalOpen(true)}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-xl text-sm shadow-lg shadow-indigo-600/30 transition-all transform active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Task</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Dynamic View Content */}
+        {activeView === 'board' && (
+          <div className="flex-1 p-6 overflow-x-auto flex gap-6 items-start">
+            {currentProject.columns.map(col => {
+              const colTasks = filteredTasks.filter(t => t.columnId === col.id);
+              return (
+                <div 
+                  key={col.id} 
+                  className="w-80 flex-shrink-0 bg-slate-900/60 border border-slate-800/80 rounded-2xl flex flex-col max-h-[calc(100vh-8rem)]"
+                >
+                  {/* Column Header */}
+                  <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${col.color}`}>
+                        {col.title}
+                      </span>
+                      <span className="text-xs text-slate-500 font-semibold">{colTasks.length}</span>
+                    </div>
+                    <button 
+                      onClick={() => setIsNewTaskModalOpen(true)}
+                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Task Cards Container */}
+                  <div className="p-3 overflow-y-auto space-y-3 flex-1">
+                    {colTasks.length === 0 ? (
+                      <div className="text-center py-10 border-2 border-dashed border-slate-800/80 rounded-xl text-slate-500 text-xs">
+                        No tasks in this column
+                      </div>
+                    ) : (
+                      colTasks.map(task => {
+                        const assignee = INITIAL_USERS.find(u => u.id === task.assigneeId);
+                        const priorityColor = 
+                          task.priority === 'Urgent' ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' :
+                          task.priority === 'High' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                          'bg-indigo-500/10 text-indigo-400 border-indigo-500/30';
+
+                        return (
+                          <div
+                            key={task.id}
+                            onClick={() => setSelectedTask(task)}
+                            className="bg-slate-900 hover:bg-slate-850 border border-slate-800/80 hover:border-indigo-500/40 p-4 rounded-xl shadow-md cursor-pointer transition-all space-y-3 group"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${priorityColor}`}>
+                                {task.priority}
+                              </span>
+                              <div className="flex items-center gap-1 text-slate-500 text-xs">
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>{task.comments.length}</span>
+                              </div>
+                            </div>
+
+                            <div className="font-semibold text-sm text-white group-hover:text-indigo-300 transition-colors">
+                              {task.title}
+                            </div>
+
+                            <p className="text-xs text-slate-400 line-clamp-2">
+                              {task.description}
+                            </p>
+
+                            {/* Labels */}
+                            {task.labels.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {task.labels.map((lbl, i) => (
+                                  <span key={i} className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md">
+                                    {lbl}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Footer: Assignee & Due Date & Column Switcher */}
+                            <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                              <div className="flex items-center gap-1.5">
+                                <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                                <span>{task.dueDate}</span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {/* Quick status shifter */}
+                                <select 
+                                  value={task.columnId}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => handleMoveTask(task.id, e.target.value)}
+                                  className="bg-slate-800 text-[10px] text-slate-300 px-2 py-1 rounded-lg border border-slate-700 focus:outline-none cursor-pointer"
+                                >
+                                  {currentProject.columns.map(c => (
+                                    <option key={c.id} value={c.id}>{c.title}</option>
+                                  ))}
+                                </select>
+
+                                {assignee && (
+                                  <img 
+                                    src={assignee.avatar} 
+                                    alt={assignee.name} 
+                                    title={`Assigned to ${assignee.name}`}
+                                    className="w-6 h-6 rounded-full object-cover border border-indigo-400/30" 
+                                  />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Analytics View */}
+        {activeView === 'analytics' && (
+          <div className="flex-1 p-8 space-y-6 max-w-5xl mx-auto w-full overflow-y-auto">
+            <div>
+              <h2 className="text-2xl font-bold text-white">Project Analytics</h2>
+              <p className="text-sm text-slate-400">Overview of task distribution, workload velocity, and team status.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl space-y-2">
+                <div className="text-sm font-semibold text-slate-400">Total Tasks</div>
+                <div className="text-3xl font-extrabold text-white">{currentProject.tasks.length}</div>
+                <div className="text-xs text-emerald-400 font-medium">↑ 12% from last sprint</div>
+              </div>
+              <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl space-y-2">
+                <div className="text-sm font-semibold text-slate-400">Completed Tasks</div>
+                <div className="text-3xl font-extrabold text-emerald-400">
+                  {currentProject.tasks.filter(t => t.columnId === 'col-done' || t.columnId.includes('done')).length}
+                </div>
+                <div className="text-xs text-slate-400">Across all columns</div>
+              </div>
+              <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl space-y-2">
+                <div className="text-sm font-semibold text-slate-400">Active Collaborators</div>
+                <div className="text-3xl font-extrabold text-indigo-400">{currentProject.members.length}</div>
+                <div className="text-xs text-slate-400">Realtime websocket connected</div>
+              </div>
+            </div>
+
+            {/* Activity Stream */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div className="flex items-center gap-2 font-semibold text-white">
+                <Activity className="w-5 h-5 text-indigo-400" />
+                <span>Live Activity Stream</span>
+              </div>
+              <div className="space-y-3">
+                {currentProject.activityLog.map(act => (
+                  <div key={act.id} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-xl text-sm">
+                    <span className="text-slate-200">{act.text}</span>
+                    <span className="text-xs text-slate-500">{act.timestamp}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Team Members View */}
+        {activeView === 'team' && (
+          <div className="flex-1 p-8 space-y-6 max-w-5xl mx-auto w-full overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">Project Members</h2>
+                <p className="text-sm text-slate-400">Manage permissions and team access for {currentProject.name}.</p>
+              </div>
+              <button 
+                onClick={() => addNotification('Invite Link', 'Invite link copied to clipboard!')}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-2 rounded-xl text-sm"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Invite Member</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {INITIAL_USERS.map(u => (
+                <div key={u.id} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <img src={u.avatar} alt={u.name} className="w-12 h-12 rounded-full object-cover border border-slate-700" />
+                    <div>
+                      <div className="font-semibold text-white">{u.name}</div>
+                      <div className="text-xs text-indigo-400">{u.role}</div>
+                      <div className="text-xs text-slate-500">{u.email}</div>
+                    </div>
+                  </div>
+                  <span className="text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 px-3 py-1 rounded-full font-medium">
+                    Active
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </main>
+
+      {/* --- TASK DETAILS & COMMENTS MODAL --- */}
+      {selectedTask && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 max-w-2xl w-full rounded-3xl shadow-2xl p-6 space-y-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-indigo-500/10 text-indigo-400 border border-indigo-500/30">
+                  {selectedTask.priority} Priority
+                </span>
+                <h3 className="text-xl font-bold text-white mt-2">{selectedTask.title}</h3>
+              </div>
+              <button 
+                onClick={() => setSelectedTask(null)}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Description</h4>
+              <p className="text-sm text-slate-300 bg-slate-950/50 p-4 rounded-xl border border-slate-800/80">
+                {selectedTask.description}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 space-y-1">
+                <div className="text-xs text-slate-500">Assignee</div>
+                <div className="text-sm font-medium text-white flex items-center gap-2">
+                  {(() => {
+                    const assignee = INITIAL_USERS.find(u => u.id === selectedTask.assigneeId);
+                    return assignee ? (
+                      <>
+                        <img src={assignee.avatar} alt={assignee.name} className="w-5 h-5 rounded-full object-cover" />
+                        <span>{assignee.name}</span>
+                      </>
+                    ) : 'Unassigned';
+                  })()}
+                </div>
+              </div>
+              <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 space-y-1">
+                <div className="text-xs text-slate-500">Due Date</div>
+                <div className="text-sm font-medium text-white">{selectedTask.dueDate}</div>
+              </div>
+            </div>
+
+            {/* Comments Section */}
+            <div className="space-y-4 pt-4 border-t border-slate-800">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-indigo-400" />
+                <span>Discussion ({selectedTask.comments.length})</span>
+              </h4>
+
+              <div className="space-y-3 max-h-48 overflow-y-auto pr-1">
+                {selectedTask.comments.length === 0 ? (
+                  <div className="text-xs text-slate-500">No comments yet. Start the conversation!</div>
+                ) : (
+                  selectedTask.comments.map(c => {
+                    const author = INITIAL_USERS.find(u => u.id === c.userId) || currentUser;
+                    return (
+                      <div key={c.id} className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-indigo-300">{author.name}</span>
+                          <span className="text-[10px] text-slate-500">{c.timestamp}</span>
+                        </div>
+                        <p className="text-xs text-slate-300">{c.text}</p>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Add Comment Input */}
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const input = e.target.elements.commentInput;
+                  handleAddComment(selectedTask.id, input.value);
+                  input.value = '';
+                }}
+                className="flex gap-2"
+              >
+                <input 
+                  name="commentInput"
+                  type="text" 
+                  placeholder="Write a comment..." 
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+                <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-medium">
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            </div>
+
+            <div className="pt-4 border-t border-slate-800 flex justify-between">
+              <button
+                onClick={() => handleDeleteTask(selectedTask.id)}
+                className="flex items-center gap-2 text-xs text-rose-400 hover:text-rose-300 px-3 py-2 rounded-xl hover:bg-rose-500/10 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete Task</span>
+              </button>
+              <button
+                onClick={() => setSelectedTask(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-sm font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- NEW TASK MODAL --- */}
+      {isNewTaskModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={handleCreateTask} className="bg-slate-900 border border-slate-800 max-w-lg w-full rounded-3xl shadow-2xl p-6 space-y-4">
+            <h3 className="text-xl font-bold text-white">Create New Task</h3>
+            
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-400">Task Title</label>
+              <input required name="title" type="text" placeholder="e.g. Implement OAuth2 Refresh Token" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-400">Description</label>
+              <textarea name="description" rows="3" placeholder="Provide details about the task..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-400">Column / Status</label>
+                <select name="columnId" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+                  {currentProject.columns.map(col => (
+                    <option key={col.id} value={col.id}>{col.title}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-400">Priority</label>
+                <select name="priority" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+                  <option value="Low">Low</option>
+                  <option value="Medium">Medium</option>
+                  <option value="High">High</option>
+                  <option value="Urgent">Urgent</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-400">Assignee</label>
+                <select name="assigneeId" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+                  {INITIAL_USERS.map(u => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-400">Due Date</label>
+                <input required name="dueDate" type="date" defaultValue="2026-11-01" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-400">Labels (Comma separated)</label>
+              <input name="labels" type="text" placeholder="Frontend, Backend, Design" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
+              <button type="button" onClick={() => setIsNewTaskModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-white">Cancel</button>
+              <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-lg shadow-indigo-600/30">Create Task</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* --- NEW PROJECT MODAL --- */}
+      {isNewProjectModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={handleCreateProject} className="bg-slate-900 border border-slate-800 max-w-md w-full rounded-3xl shadow-2xl p-6 space-y-4">
+            <h3 className="text-xl font-bold text-white">Create New Project Board</h3>
+            
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-400">Project Name</label>
+              <input required name="name" type="text" placeholder="e.g. Mobile App Redesign" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-400">Description</label>
+              <textarea name="description" rows="3" placeholder="Project goals and deliverables..." className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 resize-none" />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-400">Visibility</label>
+              <select name="visibility" className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+                <option value="team">Team Workspace (Visible to all)</option>
+                <option value="private">Private Project</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
+              <button type="button" onClick={() => setIsNewProjectModalOpen(false)} className="px-4 py-2 rounded-xl text-sm font-medium text-slate-400 hover:text-white">Cancel</button>
+              <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-lg shadow-indigo-600/30">Create Project</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+    </div>
+  );
+}
